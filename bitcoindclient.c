@@ -196,6 +196,7 @@ int main(int argc, char* argv[])
             memcpy(newBuffer,response,received);
             free(response);
             response = newBuffer;
+            total = capturedLen+received-1;
         }
         if (bytes == 0) break;
     } while (received < total);
