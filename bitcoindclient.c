@@ -3,8 +3,19 @@
 #include <arpa/inet.h> /* int_pton() function */
 #include <sys/socket.h> /* socket() and connect() functions */
 #include <unistd.h> /* read(), write(), close() functions */
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <string.h> /* sizeof() function*/
 #include "base64.c" /* base64Encode function */
+
+/* Bitcoind connection settings */
+char* ip = "127.0.0.1";
+char* host = "localhost";
+char* username = "dany";
+char* password = "123";
+uint16_t port = 8332;
+
+struct sockaddr_in serverAddr;
 
 /* Sends a message given a socket file descriptor and a message to send */
 void sendMessage(int socketFd, char* msg)
@@ -63,7 +74,7 @@ char* convertIntToStr(int x)
 }
 
 /* Build a HTTP POST request suitable for bitcoind */
-char* buildRequest(char* body, char* host,char* username, char* password)
+char* buildRequest(char* body, char* host,char* username, char* password, int closeConnection)
 {
     int bodyLen = strlen(body);
     char* bodyLenStr = convertIntToStr(bodyLen);
@@ -83,9 +94,20 @@ char* buildRequest(char* body, char* host,char* username, char* password)
     char* preContentLengthLine = "Content-Length: %s\r\n";
     char* contentLengthLine = (char*)malloc(sizeof(char)*(19+bodyLenStrSize));
     sprintf(contentLengthLine,preContentLengthLine,bodyLenStr);
-    char* res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(connectionLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+1));
-    char* preRes = "%s%s%s%s%s%s\r\n%s";
-    sprintf(res,preRes,initialLine,hostLine,connectionLine,authorizationLine,contentTypeLine,contentLengthLine,body);
+    char* res;
+    char* preRes;
+    if (closeConnection==1)
+    {
+        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(connectionLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+1));
+        preRes = "%s%s%s%s%s%s\r\n%s";
+        sprintf(res,preRes,initialLine,hostLine,connectionLine,authorizationLine,contentTypeLine,contentLengthLine,body);
+    }
+    else
+    {
+        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+1));
+        preRes = "%s%s%s%s%s\r\n%s";
+        sprintf(res,preRes,initialLine,hostLine,authorizationLine,contentTypeLine,contentLengthLine,body);
+    }
     free(bodyLenStr);
     free(hostLine);
     free(credentials);
@@ -171,15 +193,17 @@ int getContentLength(char* input, int maxlen)
 char* receiveResponse(int socketFd)
 {
     int bytes, sent, received, total;
-    int responseLength = 4096;
+    int responseLength = 200; /* Should be sufficiently large to accommodate the full HTTP header section */
     char* responseBody;
     char* response = (char*)malloc(sizeof(char)*responseLength);
     memset(response,0,sizeof(char)*responseLength); /* Initialize response buffer */
-    total = responseLength-1;
+    total = responseLength;
     received = 0;
     int capturedLen;
     char* newBuffer;
     int foundContentSize = 0;
+    int totalResponseSize=0;
+    int separatorIndex;
     do
     {
         bytes = read(socketFd,response+received,total-received);
@@ -192,30 +216,28 @@ char* receiveResponse(int socketFd)
         if (foundContentSize==0) /* Don't perform this action if "Content-Length" has been found already */
         {
             capturedLen = getContentLength(response,received);
-            if (capturedLen!=-1)
+            separatorIndex = getHeaderBodySeparatorIndex(response, received);
+            if ((capturedLen!=-1) && (separatorIndex!=-1))
             {
-                if (capturedLen>total-received)
+                totalResponseSize=separatorIndex+4+capturedLen;
+                if (totalResponseSize>total)
                 {
                     /* allocate larger array */
-                    newBuffer = (char*)malloc(sizeof(char)*(capturedLen+received));
+                    newBuffer = (char*)malloc(sizeof(char)*(totalResponseSize));
                     memcpy(newBuffer,response,received);
                     free(response);
                     response = newBuffer;
-                    total = capturedLen+received-1;
+                    total = totalResponseSize;
                 }
                 foundContentSize=1;
             }
         }
+        if ((foundContentSize==1) && (received==totalResponseSize)) break;
         if (bytes == 0) break;
     } while (received < total);
     responseBody=NULL;
-    if (received == total)
-    {
-            printErrorAndExit("ERROR storing complete response from socket");
-            return NULL;
-    }
     int index=getHeaderBodySeparatorIndex(response, total);
-    if ((index==-1) || (foundContentSize==0)) return NULL;
+    if ((index==-1) || (foundContentSize==0) || (capturedLen==0)) return NULL;
     if (response[received-1]=='\n') capturedLen--;
     responseBody = (char*)malloc(sizeof(char)*(capturedLen+1));
     memcpy(responseBody,response+index+4,capturedLen);
@@ -259,6 +281,7 @@ char* constructGetRawTransactionJSONMsg(char* txID)
 /* Extract the resulting string valine in the JSON response */
 char* extractResultStringFromJSON(char* response)
 {
+    if (response==NULL) return NULL;
     /* Get the response length */
     int len=0;
     while(response[len]!='\0') len++;
@@ -309,17 +332,59 @@ char* extractResultStringFromJSON(char* response)
     return resultVar;
 }
 
-int main(int argc, char* argv[])
+char* getRawBlock(int socketFd, int blockHeight)
 {
-	/* Connection parameters and variable declarations */
-	char* ip = "127.0.0.1";
-    char* host = "localhost";
-    char* username = "__cookie__";
-    char* password = "mY3JZM2Vd1F4cFApPiM63cxSwSQC3umZrwva/4b+u84=";
-    uint16_t port = 8332;
-    struct sockaddr_in serverAddr;
-    int socketFd;
-    int ret;
+    /* Send a request */
+    char* msg = constructGetBlockHashJSONMsg(blockHeight);
+    char* req = buildRequest(msg,host,username,password,0);
+    /*printf("Sending message : \n%s\n",req);*/
+    sendMessage(socketFd,req);
+    /* Receive the response's body */
+    char* bodyStr = receiveResponse(socketFd);
+    free(req); /* Clean up */
+    /* process response */
+    char* blockHash = extractResultStringFromJSON(bodyStr);
+    /*printf("Response: \n%s\n",blockHash);*/
+    if (blockHash==NULL) return NULL;
+    /* Send a request */
+    msg = constructGetBlockJSONMsg(blockHash);
+    req = buildRequest(msg,host,username,password,0);
+    /*printf("Sending message : \n%s\n",req);*/
+    sendMessage(socketFd,req);
+    /* Receive the response's body */
+    bodyStr = receiveResponse(socketFd);
+    free(req); /* Clean up */
+    /* process response */
+    char* rawBlock = extractResultStringFromJSON(bodyStr);
+    return rawBlock;
+}
+
+int writeToDisk(char* data, int blockID)
+{
+    struct stat st = {0};
+    if (stat("blocks", &st) == -1) mkdir("blocks", 0700);
+    char* num = convertIntToStr(blockID);
+    char* preFileName = "./blocks/block_%s.txt";
+    char* fileName = (char*)malloc(sizeof(char)*(10+strlen(num)+1));
+    sprintf(fileName,preFileName,num);
+    FILE *f = fopen(fileName, "w");
+    if (f == NULL) return -1; /* Error opening file */
+    fprintf(f, "%s", data);
+    return 0;
+}
+
+int main(int argc, char* argv[])
+{	
+    int socketFd,ret,blockIterator;
+    int startBlock, stopBlock;
+    if (argc!=3)
+    {
+        printf("Syntax: ./bitcoindclient <startBlockHeight> <stopBlockHeight>\n");
+        exit(EXIT_FAILURE);
+    }
+    startBlock=atoi(argv[1]);
+    stopBlock=atoi(argv[2]);
+    printf("Start block heigth: %i, stop block height: %i\n",startBlock,stopBlock);
     /* Creating a socket */
     socketFd = socket(AF_INET, SOCK_STREAM, 0);
     if (socketFd==-1) printErrorAndExit("Error creating socket!\n");
@@ -328,25 +393,26 @@ int main(int argc, char* argv[])
     serverAddr.sin_port = htons(port);
     ret = inet_pton(AF_INET, ip, &serverAddr.sin_addr);
     if (ret!=1) printErrorAndExit("Unable to convert given IP address!\n");
-    /* Connect to server */
- 	ret = connect(socketFd, (struct sockaddr *)&serverAddr, sizeof serverAddr);
- 	if (ret==-1) printErrorAndExit("Can't connect to remote server!\n");
+     /* Connect to server */
+    ret = connect(socketFd, (struct sockaddr *)&serverAddr, sizeof serverAddr);
+    if (ret==-1) printErrorAndExit("Can't connect to remote server!\n");
     printf("Successfully connected to remote server!\n");
-    /* Send a request */
-    char* msg = constructGetBlockHashJSONMsg(0);
-    char* req = buildRequest(msg,host,username,password);
-    printf("Sending message : \n%s\n",req);
-    sendMessage(socketFd,req);
-    /* Receive the response's body */
-    char* bodyStr = receiveResponse(socketFd);
-    free(req); /* Clean up */
+    char* block;
+    /* Query for the blocks */
+    for(int i=startBlock;i<=stopBlock;i++)
+    {
+        printf("At block %i\n",i);
+        block = getRawBlock(socketFd, blockIterator);
+        if (block!=NULL)
+        {
+            if (writeToDisk(block,i)!=0) printf("Error writing file for block %i\n",i);
+            free(block);
+        }
+        else printf("Got NULL for block %i\n",i);
+    }
     /* close the socket */
     ret = close(socketFd);
 	if (ret==-1) printErrorAndExit("Error closing socket!\n");
     printf("Closed socket successfully!\n");
-    /* process response */
-    char* responseValue = extractResultStringFromJSON(bodyStr);
-    printf("Response: \n%s\n",responseValue);
-    free(responseValue);
     return 0;
 }
