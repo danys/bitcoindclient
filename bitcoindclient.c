@@ -375,7 +375,7 @@ int writeToDisk(char* data, int blockID)
 
 int main(int argc, char* argv[])
 {	
-    int socketFd,ret,blockIterator;
+    int socketFd,ret;
     int startBlock, stopBlock;
     if (argc!=3)
     {
@@ -398,11 +398,12 @@ int main(int argc, char* argv[])
     if (ret==-1) printErrorAndExit("Can't connect to remote server!\n");
     printf("Successfully connected to remote server!\n");
     char* block;
+    if (startBlock>stopBlock) startBlock = stopBlock;
     /* Query for the blocks */
     for(int i=startBlock;i<=stopBlock;i++)
     {
         printf("At block %i\n",i);
-        block = getRawBlock(socketFd, blockIterator);
+        block = getRawBlock(socketFd, i);
         if (block!=NULL)
         {
             if (writeToDisk(block,i)!=0) printf("Error writing file for block %i\n",i);
