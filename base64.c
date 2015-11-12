@@ -7,10 +7,10 @@ static int mod_table[] = {0, 2, 1};
 
 char *base64Encode(char *data)
 {
-    size_t input_length = strlen(data);
-    size_t *output_length = (size_t*)malloc(sizeof(size_t));
-    *output_length = 4 * ((input_length + 2) / 3); /* convert 3 chars to 4 base64 chars (every base64 char consists of 6 bits) */
-    char *encoded_data = malloc(*output_length);
+    int input_length = strlen(data);
+    /* convert 3 chars to 4 base64 chars (every base64 char consists of 6 bits) */
+    int output_length = 4 * ((input_length + 2) / 3);
+    char *encoded_data = (char*)malloc((output_length+1)*sizeof(char));
     if (encoded_data == NULL) return NULL;
     for (int i = 0, j = 0; i < input_length;)
     {
@@ -24,7 +24,7 @@ char *base64Encode(char *data)
         encoded_data[j++] = encoding_table[(triple >> 6) & 0x3F]; /* shift 6 positions to the right and filter out the 6 LSBs */
         encoded_data[j++] = encoding_table[(triple) & 0x3F]; /* filter out the 6 LSBs */
     }
-    for (int i = 0; i < mod_table[input_length % 3]; i++) encoded_data[*output_length - 1 - i] = '=';
-    free(output_length);
+    for (int i = 0; i < mod_table[input_length % 3]; i++) encoded_data[output_length - 1 - i] = '=';
+    encoded_data[output_length]='\0';
     return encoded_data;
 }
