@@ -98,13 +98,13 @@ char* buildRequest(char* body, char* host,char* username, char* password, int cl
     char* preRes;
     if (closeConnection==1)
     {
-        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(connectionLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+1));
+        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(connectionLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+bodyLen+1+2));
         preRes = "%s%s%s%s%s%s\r\n%s";
         sprintf(res,preRes,initialLine,hostLine,connectionLine,authorizationLine,contentTypeLine,contentLengthLine,body);
     }
     else
     {
-        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+1));
+        res = (char*)malloc(sizeof(char)*(strlen(initialLine)+strlen(hostLine)+strlen(authorizationLine)+strlen(contentTypeLine)+strlen(contentLengthLine)+bodyLen+1+2));
         preRes = "%s%s%s%s%s\r\n%s";
         sprintf(res,preRes,initialLine,hostLine,authorizationLine,contentTypeLine,contentLengthLine,body);
     }
@@ -192,7 +192,7 @@ int getContentLength(char* input, int maxlen)
 /* Extracts the body of the response (null-terminated response) */
 char* receiveResponse(int socketFd)
 {
-    int bytes, sent, received, total;
+    int bytes, received, total;
     int responseLength = 200; /* Should be sufficiently large to accommodate the full HTTP header section */
     char* responseBody;
     char* response = (char*)malloc(sizeof(char)*responseLength);
@@ -254,6 +254,7 @@ char* constructGetBlockHashJSONMsg(int blockHeight)
     char* preMsg = "{\"jsonrpc\":1.0,\"id\":\"req\",\"method\":\"getblockhash\",\"params\":[%s]}";
     char* msg = (char*)malloc((62+len+1)*sizeof(char));
     sprintf(msg,preMsg,blockHeightStr);
+    free(blockHeightStr);
     return msg;
 }
 
@@ -337,6 +338,7 @@ char* getRawBlock(int socketFd, int blockHeight)
     /* Send a request */
     char* msg = constructGetBlockHashJSONMsg(blockHeight);
     char* req = buildRequest(msg,host,username,password,0);
+    if (msg!=NULL) free(msg);
     /*printf("Sending message : \n%s\n",req);*/
     sendMessage(socketFd,req);
     /* Receive the response's body */
@@ -348,7 +350,9 @@ char* getRawBlock(int socketFd, int blockHeight)
     if (blockHash==NULL) return NULL;
     /* Send a request */
     msg = constructGetBlockJSONMsg(blockHash);
+    if (blockHash!=NULL) free(blockHash);
     req = buildRequest(msg,host,username,password,0);
+    if (msg!=NULL) free(msg);
     /*printf("Sending message : \n%s\n",req);*/
     sendMessage(socketFd,req);
     /* Receive the response's body */
@@ -365,9 +369,11 @@ int writeToDisk(char* data, int blockID)
     if (stat("blocks", &st) == -1) mkdir("blocks", 0700);
     char* num = convertIntToStr(blockID);
     char* preFileName = "./blocks/block_%s.txt";
-    char* fileName = (char*)malloc(sizeof(char)*(10+strlen(num)+1));
+    char* fileName = (char*)malloc(sizeof(char)*(19+strlen(num)+1));
     sprintf(fileName,preFileName,num);
+    free(num);
     FILE *f = fopen(fileName, "w");
+    if (fileName!=NULL) free(fileName);
     if (f == NULL) return -1; /* Error opening file */
     fprintf(f, "%s", data);
     return 0;
