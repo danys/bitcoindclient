@@ -376,6 +376,7 @@ int writeToDisk(char* data, int blockID)
     if (fileName!=NULL) free(fileName);
     if (f == NULL) return -1; /* Error opening file */
     fprintf(f, "%s", data);
+    fclose(f);
     return 0;
 }
 
